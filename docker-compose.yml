@@ -1,0 +1,78 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: priceradar
+      POSTGRES_PASSWORD: priceradar
+      POSTGRES_DB: priceradar
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U priceradar -d priceradar"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  parser-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["arq", "app.worker.WorkerSettings"]
+    env_file: .env
+    environment:
+      # В контейнерах — PostgreSQL и Redis (перекрывает значения из .env)
+      DB_DSN: postgresql+asyncpg://priceradar:priceradar@postgres:5432/priceradar
+      REDIS_DSN: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.bot.main"]
+    env_file: .env
+    environment:
+      DB_DSN: postgresql+asyncpg://priceradar:priceradar@postgres:5432/priceradar
+      REDIS_DSN: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pg_data:
+  redis_data:
